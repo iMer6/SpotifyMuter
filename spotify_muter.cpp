@@ -12,10 +12,41 @@
 
 using namespace std;
 
+// constexpr – constant expression.
+// A constexpr variable value must be known and computable at compile-time.
+// const can be evaluate in runtime or compile-time
+//
+//
+// WM_USER – constant that used to define private messages for custom window classes.
+// Default WM_USER value is 0x0400 in hex or 1024 in decimal.
+//
+// WM_TRAYICON create unique ID for message that program will use
+// for messaging with system tray (notification scope). 
+//
+/**
+ * @brief Unique ID for system tray messages.
+ */
 constexpr unsigned int WM_TRAYICON = WM_USER + 1;
+//
+// ID_TRAY_EXIT – program exit ID.
+// If user clicked on button "Exit" in tray menu,
+// the program stop working.  
+//
+/**
+ * @brief Program exit ID.
+ * @note If user clicked on bytton "Exit of Muter" in tray menu,
+ * the program stop.
+ */
 constexpr unsigned int ID_TRAY_EXIT = 1001;
-
+/** 
+ * @brief Struct that storing icon parameters.
+ * Using to manage icons in notification scope.
+ */
 NOTIFYICONDATAW nid = {};
+/**
+ * @brief Handle to a WiNDow – window object descriptor.
+ * Address to which the system sends message.
+ */
 HWND hWndInvisible = NULL;
 
 bool IsAd(const wstring& t);
