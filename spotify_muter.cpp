@@ -10,12 +10,12 @@
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "shell32.lib")
 
-using namespace std;
+using std::wstring;
+using WindowProcedureType = LRESULT(__stdcall*)(HWND, UINT, WPARAM, LPARAM);
 
 // constexpr – constant expression.
 // A constexpr variable value must be known and computable at compile-time.
 // const can be evaluate in runtime or compile-time
-//
 //
 // WM_USER – constant that used to define private messages for custom window classes.
 // Default WM_USER value is 0x0400 in hex or 1024 in decimal.
@@ -34,7 +34,7 @@ constexpr unsigned int WM_TRAYICON = WM_USER + 1;
 //
 /**
  * @brief Program exit ID.
- * @note If user clicked on bytton "Exit of Muter" in tray menu,
+ * @note If user clicked on button "Exit of Muter" in tray menu,
  * the program stop.
  */
 constexpr unsigned int ID_TRAY_EXIT = 1001;
@@ -42,37 +42,119 @@ constexpr unsigned int ID_TRAY_EXIT = 1001;
  * @brief Struct that storing icon parameters.
  * Using to manage icons in notification scope.
  */
-NOTIFYICONDATAW nid = {};
+static NOTIFYICONDATAW nid = {};
 /**
  * @brief Handle to a WiNDow – window object descriptor.
  * Address to which the system sends message.
  */
-HWND hWndInvisible = NULL;
+static HWND hWndInvisible = NULL;
 
-bool IsAd(const wstring& t);
-
-wstring GetActiveTitle(DWORD pid);
-
+bool IsAd(const wstring&);
+wstring GetActiveTitle(DWORD);
 void RefreshAndMute();
 
-LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+LRESULT __stdcall WndProc(
+    HWND hWnd, // handle of the window that received the message
+    UINT message, // event ID
+    WPARAM wParam, // additional message information
+    LPARAM lParam // additional message information
+) {
+    // Click on the tray icon
     if (message == WM_TRAYICON) {
+        // WM_RBUTTONUP – RMB released (click)
         if (lParam == WM_RBUTTONUP) {
-            POINT curPoint;
-            GetCursorPos(&curPoint);
-            HMENU hMenu = CreatePopupMenu();
-            InsertMenuW(hMenu, 0, MF_BYPOSITION | MF_STRING, ID_TRAY_EXIT, L"Exit of Muter");
-            SetForegroundWindow(hWnd);
-            TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, curPoint.x, curPoint.y, 0, hWnd, NULL);
-            DestroyMenu(hMenu);
+            POINT currentMouseCoords;
+            GetCursorPos(&currentMouseCoords); // current cursor coordinates
+
+            HMENU hMenu = CreatePopupMenu(); // empty pop-up menu handle
+            InsertMenuW(
+                hMenu, // a handle to the menu to be changed
+                0, // before which menu item should a new one be inserted?
+                MF_BYPOSITION | MF_STRING, // flags
+                    // MF_BYPOSITION – 2nd parameter is the zero-based relative position
+                    // MF_STRING – the menu item (last parameter) is a text string
+                ID_TRAY_EXIT, // ID of the new menu item
+                L"Exit of Muter" // content of the new menu item
+            );
+            
+            SetForegroundWindow(hWnd); // focuses an invisible window.
+            // For Windows: if focus is lost, the menu should be hidden
+            // Without `SetforegroundWindow` the pop-up menu will behave buggy:
+            // the menu won't close when clicking past
+            
+            // The menu will appear where the mouse is now
+            // Lock the thread and displays the menu on the screen
+            // Waits for user to either select an item or click past
+            TrackPopupMenu(
+                hMenu, // a handle to the menu to be displayed
+                TPM_LEFTALIGN | TPM_BOTTOMALIGN | TPM_LEFTBUTTON, // flags
+                    // TPM_LEFTALIGN – menu's left edge at X (3rd parameter)
+                    // TPM_BOTTOMALIGN – menu's bottom edge at Y (4th parameter)
+                    // TPM_LEFTBUTTON – user can select menu item with only LMB
+                currentMouseCoords.x, // horizontal location of the menu, in screen coords
+                currentMouseCoords.y, // vertical location of the menu, in screen coords
+                0, // reserved. Must be 0
+                hWnd, // a handle to the window that owns the menu
+                nullptr
+            );
+            
+            // Empty message for correct focus switching
+            PostMessageW(
+                hWnd, // handle of the window to which message is sent
+                WM_NULL, // message to be posted (empty)
+                0, // additional message-specific information (0 because WM_NULL)
+                0 // additional message-specific information (0 because WM_NULL)
+            );
+            
+            DestroyMenu(hMenu); // memory deallocation
         }
+    // Click on the exit item
+    // WM_COMMAND – interaction with the menu button
     } else if (message == WM_COMMAND) {
+        // LOWORD (LOw WORD) – lower 16 bits – ID of the element that triggers the event
         if (LOWORD(wParam) == ID_TRAY_EXIT) {
-            Shell_NotifyIconW(NIM_DELETE, &nid);
-            exit(0);
+            // The OS starts destroying the window:
+                // a WM_DESTROY message is sent, followed by a WM_NCDESTROY
+                // to the window procedure of that window. 
+                // Gives the window time to free its resources
+                // but doesn't terminate the app process.
+            DestroyWindow(hWnd);
+            return 0;
         }
+    } else if (message == WM_DESTROY) {
+        // The program icon is removed from the tray
+        Shell_NotifyIconW(
+            NIM_DELETE, // action to be taken by this function
+            &nid // pointer to NOTIFYICONDATA structure
+        );
+
+        // Why not exit(0)?
+            // exit(0) forcefully terminates the process.
+            // While it closes handles, flushes buffers,
+            // and calls destructors for global objects,
+            // it ignores the Windows message queue and local function scopes.
+            // ==> local destructors inside the window procedure won't be called,
+            // stack unwinding is skipped,
+            // and OS resources might not be released correctly.
+            //
+            // DestroyWindow + WM_DESTROY (Shell_NotifyIcon + PostQuitMessage) 
+            // is the standard way to allow the app to exit naturally.
+
+        // Program termination after processing window destroy messages:
+            // puts a WM_QUIT message in the thread's message queue.
+            // When the main message loop reaches WM_QUIT,
+            // the GetMessage() returns 0 (or FALSE).
+            // This leads to an exit from the while loop in main
+            // and the program terminates naturally.
+        PostQuitMessage(0);
     }
-    return DefWindowProc(hWnd, message, wParam, lParam);
+    
+    return DefWindowProc(
+        hWnd, // a handle to the window procedure that received the message
+        message, // the message
+        wParam, // additional message information
+        lParam // additional message information
+    );
 }
 
 DWORD WINAPI MuteThread(LPVOID lpParam) {
@@ -172,7 +254,7 @@ void RefreshAndMute() {
     if (pMgr && SUCCEEDED(pMgr->GetSessionEnumerator(&pList))) {
         int count = 0;
         pList->GetCount(&count);
-        vector<DWORD> spotifyPids;
+        std::vector<DWORD> spotifyPids;
 
         for (int i = 0; i < count; i++) {
             IAudioSessionControl* pControl = NULL;
