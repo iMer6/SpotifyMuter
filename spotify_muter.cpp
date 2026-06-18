@@ -16,38 +16,45 @@ using WindowProcedureType = LRESULT(__stdcall*)(HWND, UINT, WPARAM, LPARAM);
 // constexpr – constant expression.
 // A constexpr variable value must be known and computable at compile-time.
 // const can be evaluate in runtime or compile-time
-//
-// WM_USER – constant that used to define private messages for custom window classes.
-// Default WM_USER value is 0x0400 in hex or 1024 in decimal.
-//
-// WM_TRAYICON create unique ID for message that program will use
-// for messaging with system tray (notification scope). 
-//
-/**
- * @brief Unique ID for system tray messages.
- */
-constexpr unsigned int WM_TRAYICON = WM_USER + 1;
-//
-// ID_TRAY_EXIT – program exit ID.
-// If user clicked on button "Exit" in tray menu,
-// the program stop working.  
-//
-/**
- * @brief Program exit ID.
- * @note If user clicked on button "Exit of Muter" in tray menu,
- * the program stop.
- */
-constexpr unsigned int ID_TRAY_EXIT = 1001;
-/** 
- * @brief Struct that storing icon parameters.
- * Using to manage icons in notification scope.
- */
-static NOTIFYICONDATAW nid = {};
-/**
- * @brief Handle to a WiNDow – window object descriptor.
- * Address to which the system sends message.
- */
-static HWND hWndInvisible = NULL;
+namespace {
+    // WM_USER – constant that used to define private messages for custom window classes.
+    // Default WM_USER value is 0x0400 (hex) or 1024 (decimal).
+    // WM_TRAYICON create unique ID for message that program will use
+    // for messaging with system tray (notification scope).
+    /**
+     * @brief Unique ID for system tray messages.
+     */
+    constexpr unsigned int WM_TRAYICON = WM_USER + 1;
+
+    // ID_TRAY_EXIT – program exit ID.
+    // If user clicked on button "Exit" in tray menu,
+    // the program stop working.
+    /**
+     * @brief Program exit ID.
+     * @note If user clicked on button "Exit of Muter" in tray menu,
+     * the program stop.
+     */
+    constexpr unsigned int ID_TRAY_EXIT = 1001;
+
+    /** 
+     * @brief Struct that storing icon parameters.
+     * Using to manage icons in notification scope.
+     */
+    NOTIFYICONDATAW nid = {};
+
+    /**
+     * @brief Handle to a WiNDow – window object descriptor.
+     * Address to which the system sends message.
+     */
+    HWND hWndInvisible = nullptr;
+
+    /**
+     * @brief Event handle used to signal the background thread to stop.
+     */
+    HANDLE g_StopEvent = nullptr;
+
+    HANDLE hMuteThread = nullptr;
+}
 
 bool IsAd(const wstring&);
 wstring GetActiveTitle(DWORD);
@@ -122,6 +129,13 @@ LRESULT __stdcall WndProc(
             return 0;
         }
     } else if (message == WM_DESTROY) {
+        if (g_StopEvent) {
+            SetEvent(g_StopEvent);
+            WaitForSingleObject(hMuteThread, INFINITE);
+            CloseHandle(hMuteThread);
+            CloseHandle(g_StopEvent);
+        }
+
         // The program icon is removed from the tray
         Shell_NotifyIconW(
             NIM_DELETE, // action to be taken by this function
@@ -147,6 +161,7 @@ LRESULT __stdcall WndProc(
             // This leads to an exit from the while loop in main
             // and the program terminates naturally.
         PostQuitMessage(0);
+        return 0;
     }
     
     return DefWindowProc(
@@ -157,17 +172,92 @@ LRESULT __stdcall WndProc(
     );
 }
 
-DWORD WINAPI MuteThread(LPVOID lpParam) {
-    CoInitializeEx(NULL, COINIT_MULTITHREADED);
-    while (true) {
-        RefreshAndMute();
-        Sleep(700);
+/**
+ * @brief Worker thread procedure that periodically refreshes and mutes audio sessions.
+ * 
+ * This func initializes the COM library in Multithreaded Apartment (MTA) mode
+ * to interact with the Windows Core Audio APIs.
+ * It runs an efficient polling loop until a stop signal is received.
+ * 
+ * @param lpParam unused thread parameter (marked as `[[maybe_unused]]`).
+ * 
+ * @note The loop executes `RefreshAndMute()` every 500 ms.
+ * @note It relies on the global synchronization object `g_StopEvent`.
+ * Triggering this event breaks the loop immediately,
+ * ensuring a responsive thread shutdown.
+ * 
+ * @note ASCII schema
+ * ```text
+ * Start thread
+ *      |
+ *      |
+ * Turn on COM subsystem (CoInitializeEx)
+ *      |
+ *      |==> Wait 500 ms or stop signal <== --------------------+
+ *      |       |                                               |
+ *      |       |==> 500 ms passed ==> Call RefreshAndMute() ---+
+ *      |       |
+ *      |       |==> Signal received ------+
+ *      |                                  |
+ * Turn off COM (CoUninitialize) <== ------+
+ *      |
+ *      |
+ * End (return 0)
+ * ```
+ * 
+ * @return `DWORD` – returns 0 upon successful completion and clean COM uninitialization. 
+ */
+DWORD __stdcall MuteThread([[maybe_unused]] LPVOID lpParam) {
+    /*
+    Function RefreshAndMute interact with Windows volume mixer.
+    It needs access to the Core Audio API.
+    These APIs are built on Microsoft's COM technology.
+
+    COM <==> Component Ojbect Model
+    */
+
+    // Initializing the COM library for the current thread
+    CoInitializeEx(
+        nullptr, // reserved. Must be nullptr
+        COINIT_MULTITHREADED /* MTA (Multithreaded Apartment) model
+            COM objects creates in this thread can be called from other threads
+            without additional marshaling from the system */
+    );
+
+    /*
+    Workhorse
+    
+    If g_StopEvent was raised (SetEvent) {
+        WaitForSingleObject returns WAIT_OBJECT_0.
+        WAIT_OBJECT_0 != WAIT_TIMEOUT ==> false.
+        Cycle stop.
+    } Else (500 ms have passed) {
+        WaitForSingleObject returns WAIT_TIMEOUT.
+        WAIT_TIMEOUT == WAIT_TIMEOUT ==> true.
+        Cycle continues.
     }
+    */
+    while (WaitForSingleObject(g_StopEvent, 500) == WAIT_TIMEOUT) {
+        RefreshAndMute();
+    }
+
+    /*
+    Closes the COM library on the current thread,
+    unloads all DLLs loaded by the thread,
+    frees any other resources that the thread maintains,
+    and forces all RPC connections on the thread to close
+    */
     CoUninitialize();
     return 0;
 }
 
 int WINAPI WinMain(HINSTANCE HInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd) {
+    g_StopEvent = CreateEventW(
+        nullptr,
+        TRUE,
+        FALSE,
+        L"SpotifyMuterStopEvent"
+    );
     HINSTANCE hInstance = GetModuleHandle(NULL);
     WNDCLASSEXW wc = { sizeof(WNDCLASSEXW) };
     wc.lpfnWndProc = WndProc;
@@ -185,7 +275,7 @@ int WINAPI WinMain(HINSTANCE HInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wcscpy_s(nid.szTip, L"Spotify Ad Muter активний");
     Shell_NotifyIconW(NIM_ADD, &nid);
 
-    CreateThread(NULL, 0, MuteThread, NULL, 0, NULL);
+    hMuteThread = CreateThread(NULL, 0, MuteThread, NULL, 0, NULL);
 
     ShowWindow(GetConsoleWindow(), SW_HIDE);
 
