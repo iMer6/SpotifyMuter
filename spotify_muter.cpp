@@ -60,116 +60,169 @@ bool IsAd(const wstring&);
 wstring GetActiveTitle(DWORD);
 void RefreshAndMute();
 
+/**
+ * @brief Window procedure that handles system messages for the app's window.
+ * 
+ * Manages window messages for system tray interaction,
+ * context menu execution, and graceful app shutdown.
+ * 
+ * @param hWnd handle to the window that received the message.
+ * @param message the event/message ID.
+ * @param wParam additional message information (message-dependent).
+ * @param lParam additional message information (message-dependent).
+ * 
+ * @return LRESULT – the result of the message processing (depends on the message sent).
+ * 
+ * @note Unhandled messages are passed to `DefWindowProc`.
+ * @note Implements standard WinAPI workflow, ensuring reliable focus shifting
+ * via `SetForegroundWindow` and `WM_NULL`, as well as clean resources deallocation
+ * instead of a hard process termination.
+ * 
+ * @note ASCII schema
+ * ```text
+ * Incoming Message
+ *      |
+ *      |==> Click on tray icon (message == WM_TRAYICON)
+ *      |       |
+ *      |       | ==> Create pop-up menu with button "Exit of Muter"
+ *      |
+ *      |==> Click on the exit button (message == WM_COMMAND and ID_TRAY_EXIT)
+ *      |       |
+ *      |       | ==> DestroyWindow() ==> next message is WM_DESTROY ---+
+ *      |       | ==> Returns 0                                         |
+ *      |                                                               |
+ *      |==> message == WM_DESTROY <== ---------------------------------+
+ *      |       |
+ *      |       | ==> Trigger event to finish, close handles, remove tray icon
+ *      |       | ==> Natural exit (DestroyWindow + Shell_NotifyIcon + PostQuitMessage)
+ *      |       | ==> Returns 0
+ *      |
+ *      | ==> Other messages (not processed)
+ *              │
+ *              | ==> DefWindowProc()
+ * ```
+ */
 LRESULT __stdcall WndProc(
     HWND hWnd, // handle of the window that received the message
     UINT message, // event ID
     WPARAM wParam, // additional message information
     LPARAM lParam // additional message information
 ) {
-    // Click on the tray icon
-    if (message == WM_TRAYICON) {
-        // WM_RBUTTONUP – RMB released (click)
-        if (lParam == WM_RBUTTONUP) {
-            POINT currentMouseCoords;
-            GetCursorPos(&currentMouseCoords); // current cursor coordinates
+    switch(message) {
+        // Click on the tray icon
+        case WM_TRAYICON: {
+            // WM_RBUTTONUP – RMB released (click)
+            // WM_LBUTTONUP – LMB released (click)
+            if (lParam == WM_RBUTTONUP || lParam == WM_LBUTTONUP) {
+                POINT currentMouseCoords;
+                GetCursorPos(&currentMouseCoords); // current cursor coordinates
 
-            HMENU hMenu = CreatePopupMenu(); // empty pop-up menu handle
-            InsertMenuW(
-                hMenu, // a handle to the menu to be changed
-                0, // before which menu item should a new one be inserted?
-                MF_BYPOSITION | MF_STRING, // flags
-                    // MF_BYPOSITION – 2nd parameter is the zero-based relative position
-                    // MF_STRING – the menu item (last parameter) is a text string
-                ID_TRAY_EXIT, // ID of the new menu item
-                L"Exit of Muter" // content of the new menu item
-            );
-            
-            SetForegroundWindow(hWnd); // focuses an invisible window.
-            // For Windows: if focus is lost, the menu should be hidden
-            // Without `SetforegroundWindow` the pop-up menu will behave buggy:
-            // the menu won't close when clicking past
-            
-            // The menu will appear where the mouse is now
-            // Lock the thread and displays the menu on the screen
-            // Waits for user to either select an item or click past
-            TrackPopupMenu(
-                hMenu, // a handle to the menu to be displayed
-                TPM_LEFTALIGN | TPM_BOTTOMALIGN | TPM_LEFTBUTTON, // flags
-                    // TPM_LEFTALIGN – menu's left edge at X (3rd parameter)
-                    // TPM_BOTTOMALIGN – menu's bottom edge at Y (4th parameter)
-                    // TPM_LEFTBUTTON – user can select menu item with only LMB
-                currentMouseCoords.x, // horizontal location of the menu, in screen coords
-                currentMouseCoords.y, // vertical location of the menu, in screen coords
-                0, // reserved. Must be 0
-                hWnd, // a handle to the window that owns the menu
-                nullptr
-            );
-            
-            // Empty message for correct focus switching
-            PostMessageW(
-                hWnd, // handle of the window to which message is sent
-                WM_NULL, // message to be posted (empty)
-                0, // additional message-specific information (0 because WM_NULL)
-                0 // additional message-specific information (0 because WM_NULL)
-            );
-            
-            DestroyMenu(hMenu); // memory deallocation
+                HMENU hMenu = CreatePopupMenu(); // empty pop-up menu handle
+                InsertMenuW(
+                    hMenu, // a handle to the menu to be changed
+                    0, // before which menu item should a new one be inserted?
+                    MF_BYPOSITION | MF_STRING, // flags
+                        // MF_BYPOSITION – 2nd parameter is the zero-based relative position
+                        // MF_STRING – the menu item (last parameter) is a text string
+                    ID_TRAY_EXIT, // ID of the new menu item
+                    L"Exit of Muter" // content of the new menu item
+                );
+                
+                SetForegroundWindow(hWnd); // focuses an invisible window.
+                // For Windows: if focus is lost, the menu should be hidden
+                // Without `SetforegroundWindow` the pop-up menu will behave buggy:
+                // the menu won't close when clicking past
+                
+                // The menu will appear where the mouse is now
+                // Lock the thread and displays the menu on the screen
+                // Waits for user to either select an item or click past
+                TrackPopupMenu(
+                    hMenu, // a handle to the menu to be displayed
+                    TPM_LEFTALIGN | TPM_BOTTOMALIGN | TPM_LEFTBUTTON, // flags
+                        // TPM_LEFTALIGN – menu's left edge at X (3rd parameter)
+                        // TPM_BOTTOMALIGN – menu's bottom edge at Y (4th parameter)
+                        // TPM_LEFTBUTTON – user can select menu item with only LMB
+                    currentMouseCoords.x, // horizontal location of the menu, in screen coords
+                    currentMouseCoords.y, // vertical location of the menu, in screen coords
+                    0, // reserved. Must be 0
+                    hWnd, // a handle to the window that owns the menu
+                    nullptr
+                );
+                
+                // Empty message for correct focus switching
+                PostMessageW(
+                    hWnd, // handle of the window to which message is sent
+                    WM_NULL, // message to be posted (empty)
+                    0, // additional message-specific information (0 because WM_NULL)
+                    0 // additional message-specific information (0 because WM_NULL)
+                );
+                
+                DestroyMenu(hMenu); // memory deallocation
+            }
+            return 0; // message processed
         }
-    // Click on the exit item
-    // WM_COMMAND – interaction with the menu button
-    } else if (message == WM_COMMAND) {
-        // LOWORD (LOw WORD) – lower 16 bits – ID of the element that triggers the event
-        if (LOWORD(wParam) == ID_TRAY_EXIT) {
-            // The OS starts destroying the window:
-                // a WM_DESTROY message is sent, followed by a WM_NCDESTROY
-                // to the window procedure of that window. 
-                // Gives the window time to free its resources
-                // but doesn't terminate the app process.
-            DestroyWindow(hWnd);
+
+        // Click on the exit item
+        // WM_COMMAND – interaction with the menu button
+        case WM_COMMAND: {
+            // LOWORD (LOw WORD) – lower 16 bits – ID of the element that triggers the event
+            if (LOWORD(wParam) == ID_TRAY_EXIT) {
+                // The OS starts destroying the window:
+                    // a WM_DESTROY message is sent, followed by a WM_NCDESTROY
+                    // to the window procedure of that window. 
+                    // Gives the window time to free its resources
+                    // but doesn't terminate the app process.
+                DestroyWindow(hWnd);
+                return 0;
+            }
+            break;
+        }
+
+        case WM_DESTROY: {
+            if (g_StopEvent) {
+                SetEvent(g_StopEvent);
+                WaitForSingleObject(hMuteThread, INFINITE);
+                CloseHandle(hMuteThread);
+                CloseHandle(g_StopEvent);
+            }
+
+            // The program icon is removed from the tray
+            Shell_NotifyIconW(
+                NIM_DELETE, // action to be taken by this function
+                &nid // pointer to NOTIFYICONDATA structure
+            );
+
+            // Why not exit(0)?
+                // exit(0) forcefully terminates the process.
+                // While it closes handles, flushes buffers,
+                // and calls destructors for global objects,
+                // it ignores the Windows message queue and local function scopes.
+                // ==> local destructors inside the window procedure won't be called,
+                // stack unwinding is skipped,
+                // and OS resources might not be released correctly.
+                //
+                // DestroyWindow + WM_DESTROY (Shell_NotifyIcon + PostQuitMessage)
+                // is the standard way to allow the app to exit naturally.
+
+            // Program termination after processing window destroy messages:
+                // puts a WM_QUIT message in the thread's message queue.
+                // When the main message loop reaches WM_QUIT,
+                // the GetMessage() returns 0 (or FALSE).
+                // This leads to an exit from the while loop in main
+                // and the program terminates naturally.
+            PostQuitMessage(0);
             return 0;
+            // break is not needed (unreachable code)
         }
-    } else if (message == WM_DESTROY) {
-        if (g_StopEvent) {
-            SetEvent(g_StopEvent);
-            WaitForSingleObject(hMuteThread, INFINITE);
-            CloseHandle(hMuteThread);
-            CloseHandle(g_StopEvent);
-        }
-
-        // The program icon is removed from the tray
-        Shell_NotifyIconW(
-            NIM_DELETE, // action to be taken by this function
-            &nid // pointer to NOTIFYICONDATA structure
-        );
-
-        // Why not exit(0)?
-            // exit(0) forcefully terminates the process.
-            // While it closes handles, flushes buffers,
-            // and calls destructors for global objects,
-            // it ignores the Windows message queue and local function scopes.
-            // ==> local destructors inside the window procedure won't be called,
-            // stack unwinding is skipped,
-            // and OS resources might not be released correctly.
-            //
-            // DestroyWindow + WM_DESTROY (Shell_NotifyIcon + PostQuitMessage) 
-            // is the standard way to allow the app to exit naturally.
-
-        // Program termination after processing window destroy messages:
-            // puts a WM_QUIT message in the thread's message queue.
-            // When the main message loop reaches WM_QUIT,
-            // the GetMessage() returns 0 (or FALSE).
-            // This leads to an exit from the while loop in main
-            // and the program terminates naturally.
-        PostQuitMessage(0);
-        return 0;
+        
+        default:
+            return DefWindowProc(
+                hWnd, // a handle to the window procedure that received the message
+                message, // the message
+                wParam, // additional message information
+                lParam // additional message information
+            );
     }
-    
-    return DefWindowProc(
-        hWnd, // a handle to the window procedure that received the message
-        message, // the message
-        wParam, // additional message information
-        lParam // additional message information
-    );
 }
 
 /**
