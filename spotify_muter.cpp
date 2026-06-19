@@ -339,11 +339,32 @@ int WINAPI WinMain(HINSTANCE HInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     return 0;
 }
 
-bool IsAd(const wstring& t) {
-    if (t.empty()) return true;
-    if (t == L"Spotify" || t == L"Advertisement" || t == L"Spotify Free" || t == L"Spotify Premium") return true;
-    if (t.find(L" - ") == wstring::npos) return true;
-    if (t.find(L"Ad") != wstring::npos || t.find(L"advert") != wstring::npos || t.find(L"Реклама") != wstring::npos) return true;
+bool IsAd(const wstring& title) {
+    if (title.empty()) {
+        return false;
+    }
+    
+    if (title == L"Spotify" ||
+        title == L"Слухайте музику без реклами" ||
+        title == L"Advertisement" ||
+        title == L"Spotify Free" ||
+        title == L"Spotify Premium" ||
+        title == L"Реклама"
+    ) { return true; }
+    
+    // npos (no position) – substring is not found
+    
+    if (title.find(L" - ") == wstring::npos) {
+        return true;
+    }
+
+    if (title.find(L"Advertisement") != wstring::npos ||
+        title.find(L"advert") != wstring::npos ||
+        title.find(L"Реклама") != wstring::npos
+    ) {
+        return true;
+    }
+
     return false;
 }
 
@@ -422,10 +443,12 @@ void RefreshAndMute() {
         wstring currentTitle = L"";
 
         for (DWORD pid : spotifyPids) {
-            wstring t = GetActiveTitle(pid);
-            if (!t.empty()) {
-                currentTitle = t;
-                if (IsAd(t)) muteEverything = true;
+            wstring activeTitle = GetActiveTitle(pid);
+            if (!activeTitle.empty()) {
+                currentTitle = activeTitle;
+                if (IsAd(activeTitle)) {
+                    muteEverything = true;
+                }
                 break;
             }
         }
