@@ -339,6 +339,17 @@ int WINAPI WinMain(HINSTANCE HInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     return 0;
 }
 
+/**
+ * @brief Checks whether the given window title corresponds to an advertisement
+ * or a commercial Spotify state.
+ * 
+ * Analises the window title strin to determine if it represents an ad
+ * or a generic Spotify state (like "Spotify Free") rather than an actual song.
+ * 
+ * @param title a constant reference to the window title to check.
+ * 
+ * @return bool – is an ad playing right now?
+ */
 bool IsAd(const wstring& title) {
     if (title.empty()) {
         return false;
