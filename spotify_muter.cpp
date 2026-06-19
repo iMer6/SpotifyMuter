@@ -214,15 +214,13 @@ LRESULT __stdcall WndProc(
             return 0;
             // break is not needed (unreachable code)
         }
-        
-        default:
-            return DefWindowProc(
-                hWnd, // a handle to the window procedure that received the message
-                message, // the message
-                wParam, // additional message information
-                lParam // additional message information
-            );
     }
+    return DefWindowProc(
+        hWnd, // a handle to the window procedure that received the message
+        message, // the message
+        wParam, // additional message information
+        lParam // additional message information
+    );
 }
 
 /**
