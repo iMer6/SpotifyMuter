@@ -4,6 +4,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <algorithm>
 #include <shellapi.h>
 
 #pragma comment(lib, "ole32.lib")
@@ -379,27 +380,67 @@ bool IsAd(const wstring& title) {
     return false;
 }
 
-wstring GetActiveTitle(DWORD pid) {
-    struct Target { DWORD pid; wstring title; };
-    Target target = { pid, L"" };
+std::vector<wstring> GetSpotifyTitles(const std::vector<DWORD>& spotifyPIDs) {
+    /*
+    The EnumWindows callback function cannot direclty return a value.
+    Local Target structure is created,
+    where the PID that needs to be found will be written,
+    and an empty title string, where the result will be written.
+    */
+    struct Target {
+        const std::vector<DWORD>& pids;
+        std::vector<wstring> titles;
+    };
+    Target target = {
+        spotifyPIDs,
+        {}
+    };
+    
+    EnumWindows([](
+        HWND hwnd, // handle to the window
+        LPARAM lp // (LPARAM)&target
+    ) -> BOOL {
+        // Pointer to the original target variable
+        Target* pTarget = reinterpret_cast<Target*>(lp);
 
-    EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
-        Target* t = (Target*)lp;
         DWORD winPid;
-        GetWindowThreadProcessId(hwnd, &winPid);
-        if (winPid == t->pid && IsWindowVisible(hwnd)) {
-            wchar_t buf[512];
-            if (GetWindowTextW(hwnd, buf, 512) > 0) {
-                wstring s(buf);
-                if (s.find(L"GDI+") == wstring::npos) {
-                    t->title = s;
-                    return FALSE;
+        // What PID does the current window belong to?
+        GetWindowThreadProcessId(
+            hwnd, // handle to the window
+            &winPid // pointer to a variable that receives the PID
+        );
+
+        auto it = std::find(
+            pTarget->pids.begin(),
+            pTarget->pids.end(),
+            winPid
+        );
+
+        // Is this the desired PID and is this window visible?
+        if (it != pTarget->pids.end() && IsWindowVisible(hwnd)) {
+        // if (winPid == pTarget->pid && IsWindowVisible(hwnd)) {
+            wchar_t windowTitleBuffer[512];
+            // Does the window have a title?
+            if (GetWindowTextW(
+                    hwnd, // handle to the window
+                    windowTitleBuffer, // buffer that will receive the text
+                    std::size(windowTitleBuffer) // max number of characters to copy
+                ) > 0
+            ) {
+                wstring windowTitle(windowTitleBuffer); // wchar_t ==> wstring
+                /*
+                GDI+ – service or background windows
+                created by the Windows graphics subsystem (not required)
+                */
+                if (windowTitle.find(L"GDI+") == wstring::npos) {
+                    pTarget->titles.push_back(windowTitle);
                 }
             }
         }
-        return TRUE;
-    }, (LPARAM)&target);
-    return target.title;
+        return TRUE; // continue searching
+    }, reinterpret_cast<LPARAM>(&target));
+
+    return target.titles;
 }
 
 void RefreshAndMute() {
@@ -453,16 +494,23 @@ void RefreshAndMute() {
         bool muteEverything = false;
         wstring currentTitle = L"";
 
-        for (DWORD pid : spotifyPids) {
-            wstring activeTitle = GetActiveTitle(pid);
-            if (!activeTitle.empty()) {
-                currentTitle = activeTitle;
-                if (IsAd(activeTitle)) {
+        //
+        // new
+        //
+        std::vector <wstring> activeSpotifyTitles = GetSpotifyTitles(spotifyPids);
+        for (const wstring& title : activeSpotifyTitles) {
+            if (!title.empty()) {
+                currentTitle = title;
+
+                if (IsAd(title)) {
                     muteEverything = true;
+                    break;
                 }
-                break;
             }
         }
+        //
+        //
+        //
 
         if (currentTitle.empty() || currentTitle == L"Spotify") muteEverything = true;
 
