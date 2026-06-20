@@ -14,9 +14,6 @@
 using std::wstring;
 using WindowProcedureType = LRESULT(__stdcall*)(HWND, UINT, WPARAM, LPARAM);
 
-// constexpr – constant expression.
-// A constexpr variable value must be known and computable at compile-time.
-// const can be evaluate in runtime or compile-time
 namespace {
     // WM_USER – constant that used to define private messages for custom window classes.
     // Default WM_USER value is 0x0400 (hex) or 1024 (decimal).
@@ -444,101 +441,214 @@ std::vector<wstring> GetSpotifyTitles(const std::vector<DWORD>& spotifyPIDs) {
 }
 
 void RefreshAndMute() {
-    IMMDeviceEnumerator* pEnum = NULL;
-    CoCreateInstance(
-        __uuidof(MMDeviceEnumerator),
-        NULL,
-        CLSCTX_ALL,
-        __uuidof(IMMDeviceEnumerator),
-        (void**)&pEnum
-    );
+    // Interface MultiMedia Device (part of a Windows Core Audio APIs)
+    IMMDeviceEnumerator* pDeviceEnumerator = nullptr;
     
-    if (!pEnum) return;
+    // Creates a single COM class object (multimedia device enumerator)
+    HRESULT coCreateInstanceResult = CoCreateInstance(
+        __uuidof(MMDeviceEnumerator), // class GUID to be created
+        nullptr, // the object is not being created as part of an aggregate
+        CLSCTX_INPROC_SERVER, /* class context: In-Process Server
+            Code that controls the object is loaded into the process address space.
+            Server is implemented as a DLL.
+            CoCreateInstance() ==> LoadLibrary().
 
-    IMMDevice* pDev = NULL;
-    if (FAILED(pEnum->GetDefaultAudioEndpoint(eRender, eMultimedia, &pDev))) {
-        pEnum->Release();
+            This is the fastest way to work with COM objects:
+                • no delays in data transfer (no IPC)
+            */
+        __uuidof(IMMDeviceEnumerator), // reference to the ID of the interface
+            // Used to communicate with the object
+        (void**)&pDeviceEnumerator // pointer where the reference to the create object will be written
+    );
+    if (FAILED(coCreateInstanceResult)) goto Release;
+
+    // Interface of MultiMedia Device. Audio endpoint device
+    IMMDevice* pDevice = nullptr;
+    HRESULT getDefaultAudioEndpointResult = pDeviceEnumerator->GetDefaultAudioEndpoint(
+        eRender, // the data-flow direction for the endpoint device
+            // eRender – searches for a sound playback device (audio outputs)
+        eMultimedia, // the role of the endpoint device
+            // eMultimedia – suitable for multimedia and music
+        &pDevice // pointer to a pointer variable to store the audio device address
+    );
+    if (FAILED(getDefaultAudioEndpointResult)) goto Release;
+
+    // Interface. Enables a client to access the session and volume controls
+    // for both cross-process and process-specific audio sessions
+    IAudioSessionManager2* pAudioSessionManager = nullptr;
+    HRESULT deviceActivateResult = pDevice->Activate(
+        __uuidof(IAudioSessionManager2), // interface GUID to be obtained from the device
+        CLSCTX_INPROC_SERVER,  /* class context: In-Process Server
+            Code that controls the object is loaded into the process address space.
+            Server is implemented as a DLL.
+            CoCreateInstance() ==> LoadLibrary().
+
+            This is the fastest way to work with COM objects:
+                • no delays in data transfer (no IPC)
+            */
+        nullptr, // activation parameters: not used for IAudioSessionManager2
+        (void**)&pAudioSessionManager // pointer to a pointer variable to store the interface address
+    );
+    if (FAILED(deviceActivateResult)) goto Release;
+
+    // Interface. Enumerates audio sessions on an audio device 
+    IAudioSessionEnumerator* pAudioSessionEnumerator = nullptr;
+    HRESULT getSessionEnumeratorResult = pAudioSessionManager->GetSessionEnumerator(
+        &pAudioSessionEnumerator
+    );
+    if (FAILED(getSessionEnumeratorResult)) goto Release;
+
+    int sessionCount = 0;
+    HRESULT getCountResult = pAudioSessionEnumerator->GetCount(&sessionCount);
+    if (FAILED(getCountResult)) goto Release;
+
+    std::vector<DWORD> spotifyPIds;
+    // Collect all Spotify PIDs 
+    for (int i = 0; i < sessionCount; i++) {
+        // Interface. Enables to configure the control parameters
+        // for an audio session and to monitor events in the session
+        IAudioSessionControl* pAudioSessionControl = nullptr;
+        HRESULT getSessionResult = pAudioSessionEnumerator->GetSession(
+            i, // the session number
+            &pAudioSessionControl // pointer to the IAudioSessionControl interface of the session object
+        );
+        if (FAILED(getSessionResult)) continue; // go to next session
+
+        // Interface. Used to get information about the audio session
+        // IAudioSessionControl extended version
+        IAudioSessionControl2* pAudioSessionControl2 = nullptr;
+        HRESULT queryInterfaceResult = pAudioSessionControl->QueryInterface(
+            __uuidof(IAudioSessionControl2),
+            (void**)&pAudioSessionControl2
+        );
+        if (FAILED(queryInterfaceResult)) goto ReleaseAudioSessionControls;
+
+        DWORD pid = 0;
+        HRESULT getProcessIdResult = pAudioSessionControl2->GetProcessId(&pid);
+        if (FAILED(getProcessIdResult) || pid == 0) goto ReleaseAudioSessionControls;
+
+        HANDLE hOpenProcess = OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, // the access to the process object
+                // PROCESS_QUERY_LIMITED_INFORMATION – to retrieve the executable image full name
+            FALSE, // the processes do not inherit this handle
+            pid // the local process ID to be opened
+        );
+        if (hOpenProcess) {
+            wchar_t pathBuffer[MAX_PATH];
+            DWORD bufferSize = MAX_PATH;
+            if (QueryFullProcessImageNameW(
+                    hOpenProcess, // handle to the process
+                    0, // flags
+                        // 0 – the name should use the Win32 path format
+                    pathBuffer, // the path to the executable image
+                    &bufferSize // the size of the path buffer 
+                ))
+            {
+                if (wstring(pathBuffer).find(L"Spotify.exe") != wstring::npos) {
+                    spotifyPIds.push_back(pid);
+                }
+            }
+            CloseHandle(hOpenProcess);
+        }
+
+        ReleaseAudioSessionControls:
+            if (pAudioSessionControl2) {
+                pAudioSessionControl2->Release();
+                pAudioSessionControl2 = nullptr;
+            }
+            if (pAudioSessionControl) {
+                pAudioSessionControl->Release();
+                pAudioSessionControl = nullptr;
+            }
+    }
+
+    bool mute = false;
+
+    std::vector <wstring> activeSpotifyTitles = GetSpotifyTitles(spotifyPIds);
+    for (const wstring& title : activeSpotifyTitles) {
+        if (!title.empty() && IsAd(title)) {
+            mute = true;
+            break;
+        }
+    }
+
+    for (int i = 0; i < sessionCount; i++) {
+        // Interface. Enables to configure the control parameters
+        // for an audio session and to monitor events in the session
+        IAudioSessionControl* pAudioSessionControl = nullptr;
+        HRESULT getSessionResult = pAudioSessionEnumerator->GetSession(
+            i, // the session number
+            &pAudioSessionControl // pointer to the IAudioSessionControl interface of the session object
+        );
+        if (FAILED(getSessionResult)) continue; // go to next session
+
+        // Interface. Used to get information about the audio session
+        // IAudioSessionControl extended version
+        IAudioSessionControl2* pAudioSessionControl2 = nullptr;
+        HRESULT queryInterfaceResult2 = pAudioSessionControl->QueryInterface(
+            __uuidof(IAudioSessionControl2),
+            (void**)&pAudioSessionControl2
+        );
+        if (FAILED(queryInterfaceResult2)) goto ReleaseSessionControls;
+
+        DWORD pid = 0;
+        HRESULT getProcessIdResult = pAudioSessionControl2->GetProcessId(&pid);
+        if (FAILED(getProcessIdResult)) goto ReleaseSessionControls;
+
+        bool isSpotifyPId = false;
+        for (const DWORD& spotifyPId : spotifyPIds) {
+            if (spotifyPId == pid) {
+                isSpotifyPId = true;
+                break;
+            }
+        }
+
+        ISimpleAudioVolume* pSimpleAudioVolume = nullptr;
+        if (isSpotifyPId) {
+            HRESULT queryInterfaceResult = pAudioSessionControl->QueryInterface(
+                __uuidof(ISimpleAudioVolume),
+                (void**)&pSimpleAudioVolume
+            );
+
+            if (SUCCEEDED(queryInterfaceResult)) {
+                pSimpleAudioVolume->SetMute(
+                    mute, // new muting state
+                    nullptr // no need to track who muted Spotify
+                );
+            }
+        }
+
+        ReleaseSessionControls:
+            if (pSimpleAudioVolume) {
+                pSimpleAudioVolume->Release();
+                pSimpleAudioVolume = nullptr;
+            }
+            if (pAudioSessionControl2) {
+                pAudioSessionControl2->Release();
+                pAudioSessionControl2 = nullptr;
+            }
+            if (pAudioSessionControl) {
+                pAudioSessionControl->Release();
+                pAudioSessionControl = nullptr;
+            }
+    }
+    
+    Release:
+        if (pAudioSessionEnumerator) {
+            pAudioSessionEnumerator->Release();
+            pAudioSessionEnumerator = nullptr;
+        }
+        if (pAudioSessionManager) {
+            pAudioSessionManager->Release();
+            pAudioSessionManager = nullptr;
+        }
+        if (pDevice) {
+            pDevice->Release();
+            pDevice = nullptr;
+        }
+        if (pDeviceEnumerator) {
+            pDeviceEnumerator->Release();
+            pDeviceEnumerator = nullptr;
+        }
         return;
-    }
-
-    IAudioSessionManager2* pMgr = NULL;
-    pDev->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, NULL, (void**)&pMgr);
-
-    IAudioSessionEnumerator* pList = NULL;
-    if (pMgr && SUCCEEDED(pMgr->GetSessionEnumerator(&pList))) {
-        int count = 0;
-        pList->GetCount(&count);
-        std::vector<DWORD> spotifyPids;
-
-        for (int i = 0; i < count; i++) {
-            IAudioSessionControl* pControl = NULL;
-            pList->GetSession(i, &pControl);
-            IAudioSessionControl2* pControl2 = NULL;
-            if (pControl && SUCCEEDED(pControl->QueryInterface(__uuidof(IAudioSessionControl2), (void**)&pControl2))) {
-                DWORD pid;
-                pControl2->GetProcessId(&pid);
-                HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-                if (h) {
-                    wchar_t path[MAX_PATH];
-                    DWORD sz = MAX_PATH;
-                    if (QueryFullProcessImageNameW(h, 0, path, &sz)) {
-                        if (wstring(path).find(L"Spotify.exe") != wstring::npos) spotifyPids.push_back(pid);
-                    }
-                    CloseHandle(h);
-                }
-                pControl2->Release();
-            }
-            if (pControl) pControl->Release();
-        }
-
-        bool muteEverything = false;
-        wstring currentTitle = L"";
-
-        //
-        // new
-        //
-        std::vector <wstring> activeSpotifyTitles = GetSpotifyTitles(spotifyPids);
-        for (const wstring& title : activeSpotifyTitles) {
-            if (!title.empty()) {
-                currentTitle = title;
-
-                if (IsAd(title)) {
-                    muteEverything = true;
-                    break;
-                }
-            }
-        }
-        //
-        //
-        //
-
-        if (currentTitle.empty() || currentTitle == L"Spotify") muteEverything = true;
-
-        for (int i = 0; i < count; i++) {
-            IAudioSessionControl* pControl = NULL;
-            pList->GetSession(i, &pControl);
-            IAudioSessionControl2* pControl2 = NULL;
-            if (pControl && SUCCEEDED(pControl->QueryInterface(__uuidof(IAudioSessionControl2), (void**)&pControl2))) {
-                DWORD pid;
-                pControl2->GetProcessId(&pid);
-                bool isSpotify = false;
-                for (DWORD s : spotifyPids) if (s == pid) { isSpotify = true; break; }
-
-                if (isSpotify) {
-                    ISimpleAudioVolume* pVol = NULL;
-                    pControl->QueryInterface(__uuidof(ISimpleAudioVolume), (void**)&pVol);
-                    if (pVol) {
-                        pVol->SetMute(muteEverything, NULL);
-                        pVol->Release();
-                    }
-                }
-                pControl2->Release();
-            }
-            if (pControl) pControl->Release();
-        }
-        pList->Release();
-    }
-    if (pMgr) pMgr->Release();
-    pDev->Release();
-    pEnum->Release();
 }
