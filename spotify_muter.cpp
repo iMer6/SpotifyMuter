@@ -7,12 +7,8 @@
 #include <algorithm>
 #include <shellapi.h>
 
-#pragma comment(lib, "ole32.lib")
-#pragma comment(lib, "user32.lib")
-#pragma comment(lib, "shell32.lib")
-
 using std::wstring;
-using WindowProcedureType = LRESULT(__stdcall*)(HWND, UINT, WPARAM, LPARAM);
+using WindowProcedureType = LRESULT(CALLBACK*)(HWND, UINT, WPARAM, LPARAM);
 
 namespace {
     // WM_USER – constant that used to define private messages for custom window classes.
@@ -58,9 +54,143 @@ namespace {
     HANDLE g_hMuteThread = nullptr;
 }
 
+LRESULT CALLBACK WindowProcedure(HWND, UINT, WPARAM, LPARAM);
+DWORD WINAPI MuteThread([[maybe_unused]] LPVOID);
 bool IsAd(const wstring&);
 std::vector<wstring> GetSpotifyTitls(const std::vector<DWORD>&);
 void RefreshAndMute();
+
+int WINAPI WinMain(
+    HINSTANCE hInstance,
+    [[maybe_unused]] HINSTANCE hPrevInstance,
+    [[maybe_unused]] LPSTR lpCmdLine,
+    [[maybe_unused]] int nShowCmd
+) {
+    g_StopEvent = CreateEventW(
+        nullptr, // the handle cannot be inherited by child processes
+        1, // TRUE. Event object is a manual-reset
+              // ResetEvent() to set the event state to nonsignaled
+        0, // FALSE. The initial state of the event object is nonsignaled
+        L"SpotifyMuterStopEvent" // event object name
+    );
+    if (!g_StopEvent) return 1;
+
+    /*
+    The window is invisible.
+    Style, icon, curson, background, menu is no needed.
+    Win32 architecture requires an invisible window to receive messages (e.g. clicks)
+    */
+    WNDCLASSEXW windowClassInfo = {};
+    windowClassInfo.cbSize = sizeof(WNDCLASSEXW);
+    windowClassInfo.lpfnWndProc = WindowProcedure; // window procedure
+    windowClassInfo.hInstance = hInstance; // app instance handle
+    windowClassInfo.lpszClassName = L"SpotifyMuterClass"; // window class name    
+    RegisterClassExW(&windowClassInfo);
+
+    g_hWndInvisible = CreateWindowExW(
+        0, // extended window style
+        L"SpotifyMuterClass", // window class name
+        L"Spotify Muter", // window name
+        0, // window style
+        0, // initial window horizontal position
+        0, // initial window vertical position
+        0, // window width (device units)
+        0, // window height (device units)
+        nullptr, // handle to the parent or owner window
+        nullptr, // handle to a menu. nullptr = The class menu to be used
+        hInstance, // handle to the module instance to be associated with the window
+        nullptr // additional data. nullptr = No needed
+    );
+    if (!g_hWndInvisible) return 1;
+
+    g_nid.cbSize = sizeof(NOTIFYICONDATAW); // structure size (bytes)
+    g_nid.hWnd = g_hWndInvisible; // handle to the window that receives notifications
+    g_nid.uID = 1; // app-defined taskbar icon ID
+    g_nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP; /* flags
+        NIF_MESSAGE = the  5th parameter member is valid
+        NIF_ICON = the 6th parameter is valid
+        NIF_TIP = the 7th parameter is valid
+    */
+    g_nid.uCallbackMessage = WM_TRAYICON; // app-defined message ID
+    g_nid.hIcon = reinterpret_cast<HICON>(LoadImageW(
+        nullptr, // system resource that is built into Windows itself
+        reinterpret_cast<wchar_t*>(32512), /* image
+            32512 == IDIAPPLICATION == Default application icon */
+        1, // type. IMAGE_ICON
+        0, // icon width (pixels)
+        0, // icon height (pixels)
+        LR_DEFAULTSIZE | LR_SHARED /* flags
+            LR_DEFAULTSIZE = uses system metrics for width and height
+                if 4th and 5th parameters is 0.
+                Default 16×16 or 32×32 pixels
+            LR_SHARED = if the icon has already been loaded
+                (by another process or previously), there is no need to load it again.
+                Using a reference (copy).
+
+                No need to call DestroyIcon().
+                Windows will clean it up when the app closes.
+
+                Required for system icons.
+        */
+    )), // handle to the icon. Default system app icon,
+    wcscpy_s(g_nid.szTip, L"Spotify Muter (Running)"); // tooltip
+
+    // Add the app icon in the system tray ("^" on the task bar)
+    Shell_NotifyIconW(
+        NIM_ADD, // action to be taken
+        &g_nid // pointer to the NOTIFYICONDATA structure
+    );
+
+    // Start a background thread to monitor Spotify state and mute it
+    g_hMuteThread = CreateThread(
+        nullptr, // security attributes.
+            // nullptr = default security desctiptor, handle cannot be inherited
+        0, // initial stack size. Default 1 MB
+        MuteThread, // pointer to app-defined func to be executex by the thread.
+        nullptr, // pointer to a variable to be passed to the thread. No additional data
+        0, // flags
+           // 0 = the thread runs immediately after creation
+        nullptr // the thread ID is not returned
+    );
+
+    // Buffer to the message
+    MSG message;
+    /* Message loop
+    
+    Windows is an event-driven system.
+    When the system wants to close an app, Windows receive the event,
+    wraps it in an MSG and put into app's message queue.
+    App must constantly check this queue, take messages from it and process them.
+    Message loop keeps the program alive and allows it to interact with OC
+    (respond to clicks on the tray icon)
+    */
+    while (GetMessageW(
+        &message, // pointer to MSG structure
+        nullptr, // collect messages for all windows, created by the current thread
+                 // + thread messages
+        0, // ignore messages with IDs < the specified one
+        0 // ignore messages with IDs > the specified one
+        /* 0 + 0 = app will collect all event (mouse movements, clicks,
+            system commands, tray notifications) in chronological order.
+        */
+    )) {
+        TranslateMessage(&message); // virtual-key message ==> charecters messages
+        DispatchMessageW(&message); // dispatches message ==> WindowProcedure
+    }
+
+    // Memory deallocation at an exit
+
+    // Waiting for the thread to finish
+    if (g_hMuteThread) {
+        WaitForSingleObject(g_hMuteThread, 2000);
+        CloseHandle(g_hMuteThread);
+    }
+    if (g_StopEvent) {
+        CloseHandle(g_StopEvent);
+    }
+
+    return static_cast<int>(message.wParam);
+}
 
 /**
  * @brief Window procedure that handles system messages for the app's window.
@@ -223,6 +353,7 @@ LRESULT CALLBACK WindowProcedure(
     );
 }
 
+
 /**
  * @brief Worker thread procedure that periodically refreshes and mutes audio sessions.
  * 
@@ -302,138 +433,6 @@ DWORD WINAPI MuteThread([[maybe_unused]] LPVOID lpParam) {
     return 0;
 }
 
-int WINAPI WinMain(
-    HINSTANCE hInstance,
-    [[maybe_unused]] HINSTANCE hPrevInstance,
-    [[maybe_unused]] LPSTR lpCmdLine,
-    [[maybe_unused]] int nShowCmd
-) {
-    g_StopEvent = CreateEventW(
-        nullptr, // the handle cannot be inherited by child processes
-        1, // TRUE. Event object is a manual-reset
-              // ResetEvent() to set the event state to nonsignaled
-        0, // FALSE. The initial state of the event object is nonsignaled
-        L"SpotifyMuterStopEvent" // event object name
-    );
-    if (!g_StopEvent) return 1;
-
-    /*
-    The window is invisible.
-    Style, icon, curson, background, menu is no needed.
-    Win32 architecture requires an invisible window to receive messages (e.g. clicks)
-    */
-    WNDCLASSEXW windowClassInfo = {};
-    windowClassInfo.cbSize = sizeof(WNDCLASSEXW);
-    windowClassInfo.lpfnWndProc = WindowProcedure; // window procedure
-    windowClassInfo.hInstance = hInstance; // app instance handle
-    windowClassInfo.lpszClassName = L"SpotifyMuterClass"; // window class name    
-    RegisterClassExW(&windowClassInfo);
-
-    g_hWndInvisible = CreateWindowExW(
-        0, // extended window style
-        L"SpotifyMuterClass", // window class name
-        L"Spotify Muter", // window name
-        0, // window style
-        0, // initial window horizontal position
-        0, // initial window vertical position
-        0, // window width (device units)
-        0, // window height (device units)
-        nullptr, // handle to the parent or owner window
-        nullptr, // handle to a menu. nullptr = The class menu to be used
-        hInstance, // handle to the module instance to be associated with the window
-        nullptr // additional data. nullptr = No needed
-    );
-    if (!g_hWndInvisible) return 1;
-
-    g_nid.cbSize = sizeof(NOTIFYICONDATAW); // structure size (bytes)
-    g_nid.hWnd = g_hWndInvisible; // handle to the window that receives notifications
-    g_nid.uID = 1; // app-defined taskbar icon ID
-    g_nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP; /* flags
-        NIF_MESSAGE = the  5th parameter member is valid
-        NIF_ICON = the 6th parameter is valid
-        NIF_TIP = the 7th parameter is valid
-    */
-    g_nid.uCallbackMessage = WM_TRAYICON; // app-defined message ID
-    g_nid.hIcon = reinterpret_cast<HICON>(LoadImageW(
-        nullptr, // system resource that is built into Windows itself
-        reinterpret_cast<wchar_t*>(32512), /* image
-            32512 == IDIAPPLICATION == Default application icon */
-        1, // type. IMAGE_ICON
-        0, // icon width (pixels)
-        0, // icon height (pixels)
-        LR_DEFAULTSIZE | LR_SHARED /* flags
-            LR_DEFAULTSIZE = uses system metrics for width and height
-                if 4th and 5th parameters is 0.
-                Default 16×16 or 32×32 pixels
-            LR_SHARED = if the icon has already been loaded
-                (by another process or previously), there is no need to load it again.
-                Using a reference (copy).
-
-                No need to call DestroyIcon().
-                Windows will clean it up when the app closes.
-
-                Required for system icons.
-        */
-    )), // handle to the icon. Default system app icon,
-    wcscpy_s(g_nid.szTip, L"Spotify Muter (Running)"); // tooltip
-
-    // Add the app icon in the system tray ("^" on the task bar)
-    Shell_NotifyIconW(
-        NIM_ADD, // action to be taken
-        &g_nid // pointer to the NOTIFYICONDATA structure
-    );
-
-    // Start a background thread to monitor Spotify state and mute it
-    g_hMuteThread = CreateThread(
-        nullptr, // security attributes.
-            // nullptr = default security desctiptor, handle cannot be inherited
-        0, // initial stack size. Default 1 MB
-        MuteThread, // pointer to app-defined func to be executex by the thread.
-        nullptr, // pointer to a variable to be passed to the thread. No additional data
-        0, // flags
-           // 0 = the thread runs immediately after creation
-        nullptr // the thread ID is not returned
-    );
-
-    // Buffer to the message
-    MSG message;
-    /* Message loop
-    
-    Windows is an event-driven system.
-    When the system wants to close an app, Windows receive the event,
-    wraps it in an MSG and put into app's message queue.
-    App must constantly check this queue, take messages from it and process them.
-    Message loop keeps the program alive and allows it to interact with OC
-    (respond to clicks on the tray icon)
-    */
-    while (GetMessageW(
-        &message, // pointer to MSG structure
-        nullptr, // collect messages for all windows, created by the current thread
-                 // + thread messages
-        0, // ignore messages with IDs < the specified one
-        0 // ignore messages with IDs > the specified one
-        /* 0 + 0 = app will collect all event (mouse movements, clicks,
-            system commands, tray notifications) in chronological order.
-        */
-    )) {
-        TranslateMessage(&message); // virtual-key message ==> charecters messages
-        DispatchMessageW(&message); // dispatches message ==> WindowProcedure
-    }
-
-    // Memory deallocation at an exit
-
-    // Waiting for the thread to finish
-    if (g_hMuteThread) {
-        WaitForSingleObject(g_hMuteThread, 2000);
-        CloseHandle(g_hMuteThread);
-    }
-    if (g_StopEvent) {
-        CloseHandle(g_StopEvent);
-    }
-
-    return static_cast<int>(message.wParam);
-}
-
 /**
  * @brief Checks whether the given window title corresponds to an advertisement
  * or a commercial Spotify state.
@@ -485,10 +484,7 @@ std::vector<wstring> GetSpotifyTitles(const std::vector<DWORD>& spotifyPIDs) {
         const std::vector<DWORD>& pids;
         std::vector<wstring> titles;
     };
-    Target target = {
-        spotifyPIDs,
-        {}
-    };
+    Target target = { spotifyPIDs, {} };
     
     EnumWindows([](
         HWND hwnd, // handle to the window
@@ -504,14 +500,14 @@ std::vector<wstring> GetSpotifyTitles(const std::vector<DWORD>& spotifyPIDs) {
             &winPid // pointer to a variable that receives the PID
         );
 
-        auto it = std::find(
-            pTarget->pids.begin(),
-            pTarget->pids.end(),
-            winPid
+        std::vector<DWORD>::const_iterator foundPIdIterator = std::find(
+            pTarget->pids.begin(), // start (first element)
+            pTarget->pids.end(), // finish (last element)
+            winPid // value to be search
         );
 
         // Is this the desired PID and is this window visible?
-        if (it != pTarget->pids.end() && IsWindowVisible(hwnd)) {
+        if (foundPIdIterator != pTarget->pids.end() && IsWindowVisible(hwnd)) {
         // if (winPid == pTarget->pid && IsWindowVisible(hwnd)) {
             wchar_t windowTitleBuffer[512];
             // Does the window have a title?
@@ -619,11 +615,11 @@ void RefreshAndMute() {
         );
         if (FAILED(getSessionResult)) continue; // go to next session
 
-        HRESULT queryInterfaceResult = pAudioSessionControl->QueryInterface(
+        HRESULT queryInterfaceResult2 = pAudioSessionControl->QueryInterface(
             __uuidof(IAudioSessionControl2),
             (void**)&pAudioSessionControl2
         );
-        if (SUCCEEDED(queryInterfaceResult)) {
+        if (SUCCEEDED(queryInterfaceResult2)) {
             DWORD pid = 0;
             HRESULT getProcessIdResult = pAudioSessionControl2->GetProcessId(&pid);
             if (SUCCEEDED(getProcessIdResult) && pid != 0) {
