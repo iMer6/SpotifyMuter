@@ -1,7 +1,8 @@
 *.exe
-.vscode/
+.*/
 build/
 
 *.log
 *.tmp
 *.txt
+.clangd
