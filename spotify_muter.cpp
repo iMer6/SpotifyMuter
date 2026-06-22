@@ -1,30 +1,204 @@
-#include <windows.h>
-#include <mmdeviceapi.h>
-#include <audiopolicy.h>
-#include <iostream>
-#include <string>
-#include <vector>
 #include <algorithm>
-#include <shellapi.h>
+/* algorithm
+    find
+*/
+#include <vector>
+/* vector
+    vector,
+    const_iterator
 
-using std::wstring;
+    begin,
+    end,
+    push_back
+*/
+#include <string>
+/* string
+    wstring,
+
+    wcscpy_s,
+    empty,
+    find
+*/
+#include <windef.h>
+/* windef.h
+    HWND,
+    HICON,
+    POINT,
+    HMENU
+*/
+#include <minwindef.h>
+/* minwindef.h
+    LRESULT,
+    UINT,
+    WPARAM,
+    LPARAM,
+    DWORD,
+    LPVOID,
+    HINSTANCE,
+    BOOL
+
+    CALLBACK,
+    WINAPI,
+    TRUE,
+    FALSE,
+    LOWORD,
+    MAX_PATH
+*/
+#include <winuser.h>
+/* winuser.h
+    WNDCLASSEXW,
+    MSG
+
+    RegisterClassExW,
+    CreateWindowExW,
+    LoadImageW,
+    GetMessageW,
+    TranslateMessage,
+    DispatchMessageW,
+    GetCursorPos,
+    CreatePopupMenu,
+    InsertMenuW,
+    SetForegroundWindow,
+    TrackPopupMenu,
+    PostMessageW,
+    DestroyMenu,
+    DestroyWindow,
+    PostQuitMessage,
+    EnumWindows,
+    GetWindowThreadProcessId,
+    IsWindowVisible,
+    GetWindowTextW
+    
+    WM_USER,
+    LR_DEFAULTSIZE,
+    LR_SHARED,
+    WM_RBUTTONUP,
+    WM_LBUTTONUP,
+    MF_BYPOSITION,
+    MF_STRING,
+    TPM_LEFTALIGN,
+    TPM_BOTTOMALIGN,
+    TPM_LEFTBUTTON,
+    WM_NULL,
+    WM_COMMAND,
+    WM_DESTROY,
+    DefWindowProc
+*/
+#include <processthreadsapi.h>
+/* processthreadsapi.h
+    CreateThread,
+    OpenProcess
+*/
+#include <shellapi.h>
+/* shellapi.h
+    NOTIFYICONDATAW
+
+    Shell_NotifyIconW
+    
+    NIF_MESSAGE,
+    NIF_ICON,
+    NIF_TIP,
+    NIM_ADD,
+    NIM_DELETE
+*/
+#include <winnt.h>
+/* winnt.h
+    HANDLE,
+    LPSTR,
+    HRESULT
+
+    PROCESS_QUERY_LIMITED_INFORMATION
+*/
+#include <synchapi.h>
+/* synchapi.h
+    CreateEventW,
+    WaitForSingleObject,
+    SetEvent
+*/
+#include <handleapi.h>
+/* handleapi.h
+    CloseHandle
+*/
+#include <combaseapi.h>
+/* combaseapi.h
+    CoInitializeEx,
+    CoUninitialize,
+    CoCreateInstance
+*/
+#include <objbase.h>
+/* objbase.h
+    COINIT_MULTITHREADED
+*/
+#include <winerror.h>
+/* winerror.h
+    WAIT_TIMEOUT,
+    E_FAIL,
+    FAILED,
+    SUCCEEDED
+*/
+#include <iterator>
+/* iterator
+    size
+*/
+#include <mmdeviceapi.h>
+/* mmdeviceapi.h
+    IMMDeviceEnumerator,
+    IMMDevice,
+    MMDeviceEnumerator
+
+    GetDefaultAudioEndpoint,
+    Activate
+
+    eRender,
+    eMultimedia
+*/
+#include <audiopolicy.h>
+/* audiopolicy.h
+    IAudioSessionManager2,
+    IAudioSessionEnumerator,
+    IAudioSessionControl,
+    IAudioSessionControl2
+
+    GetSessionEnumerator,
+    GetCount,
+    GetSession,
+    GetProcessId
+*/
+#include <audioclient.h>
+/* audioclient.h
+    ISimpleAudioVolume,
+    SetMute
+*/
+#include <wtypesbase.h>
+/* wtypesbase.h
+    CLSCTX_INPROC_SERVER
+*/
+#include <unknwnbase.h>
+/* unknwnbase.h
+    QueryInterface,
+    Release
+*/
+#include <winbase.h>
+/* winbase.h
+    QueryFullProcessImageNameW
+*/
+
 using WindowProcedureType = LRESULT(CALLBACK*)(HWND, UINT, WPARAM, LPARAM);
 
 namespace {
-    // WM_USER – constant that used to define private messages for custom window classes.
-    // Default WM_USER value is 0x0400 (hex) or 1024 (decimal).
-    // WM_TRAYICON create unique ID for message that program will use
-    // for messaging with system tray (notification scope).
     /**
      * @brief Unique ID for system tray messages.
+     * 
+     * @note WM_USER – constant that used to define private messages for custom window classes.
+     * @note Default WM_USER value is 0x0400 (hex) or 1024 (decimal).
+     * @note WM_TRAYICON create unique ID for message that program will use
+     * for messaging with system tray (notification scope).
      */
     constexpr unsigned int WM_TRAYICON = WM_USER + 1;
 
-    // ID_TRAY_EXIT – program exit ID.
-    // If user clicked on button "Exit" in tray menu,
-    // the program stop working.
     /**
      * @brief Program exit ID.
+     * 
      * @note If user clicked on button "Exit of Muter" in tray menu,
      * the program stop.
      */
@@ -56,8 +230,8 @@ namespace {
 
 LRESULT CALLBACK WindowProcedure(HWND, UINT, WPARAM, LPARAM);
 DWORD WINAPI MuteThread([[maybe_unused]] LPVOID);
-bool IsAd(const wstring&);
-std::vector<wstring> GetSpotifyTitls(const std::vector<DWORD>&);
+bool IsAd(const std::wstring&);
+std::vector<std::wstring> GetSpotifyTitls(const std::vector<DWORD>&);
 void RefreshAndMute();
 
 int WINAPI WinMain(
@@ -68,9 +242,9 @@ int WINAPI WinMain(
 ) {
     g_StopEvent = CreateEventW(
         nullptr, // the handle cannot be inherited by child processes
-        1, // TRUE. Event object is a manual-reset
+        TRUE, // TRUE. Event object is a manual-reset
               // ResetEvent() to set the event state to nonsignaled
-        0, // FALSE. The initial state of the event object is nonsignaled
+        FALSE, // FALSE. The initial state of the event object is nonsignaled
         L"SpotifyMuterStopEvent" // event object name
     );
     if (!g_StopEvent) return 1;
@@ -179,7 +353,6 @@ int WINAPI WinMain(
     }
 
     // Memory deallocation at an exit
-
     // Waiting for the thread to finish
     if (g_hMuteThread) {
         WaitForSingleObject(g_hMuteThread, 2000);
@@ -353,7 +526,6 @@ LRESULT CALLBACK WindowProcedure(
     );
 }
 
-
 /**
  * @brief Worker thread procedure that periodically refreshes and mutes audio sessions.
  * 
@@ -444,7 +616,7 @@ DWORD WINAPI MuteThread([[maybe_unused]] LPVOID lpParam) {
  * 
  * @return bool – is an ad playing right now?
  */
-bool IsAd(const wstring& title) {
+bool IsAd(const std::wstring& title) {
     if (title.empty()) {
         return false;
     }
@@ -459,13 +631,13 @@ bool IsAd(const wstring& title) {
     
     // npos (no position) – substring is not found
     
-    if (title.find(L" - ") == wstring::npos) {
+    if (title.find(L" - ") == std::wstring::npos) {
         return true;
     }
 
-    if (title.find(L"Advertisement") != wstring::npos ||
-        title.find(L"advert") != wstring::npos ||
-        title.find(L"Реклама") != wstring::npos
+    if (title.find(L"Advertisement") != std::wstring::npos ||
+        title.find(L"advert") != std::wstring::npos ||
+        title.find(L"Реклама") != std::wstring::npos
     ) {
         return true;
     }
@@ -473,7 +645,7 @@ bool IsAd(const wstring& title) {
     return false;
 }
 
-std::vector<wstring> GetSpotifyTitles(const std::vector<DWORD>& spotifyPIDs) {
+std::vector<std::wstring> GetSpotifyTitles(const std::vector<DWORD>& spotifyPIDs) {
     /*
     The EnumWindows callback function cannot direclty return a value.
     Local Target structure is created,
@@ -482,7 +654,7 @@ std::vector<wstring> GetSpotifyTitles(const std::vector<DWORD>& spotifyPIDs) {
     */
     struct Target {
         const std::vector<DWORD>& pids;
-        std::vector<wstring> titles;
+        std::vector<std::wstring> titles;
     };
     Target target = { spotifyPIDs, {} };
     
@@ -508,7 +680,6 @@ std::vector<wstring> GetSpotifyTitles(const std::vector<DWORD>& spotifyPIDs) {
 
         // Is this the desired PID and is this window visible?
         if (foundPIdIterator != pTarget->pids.end() && IsWindowVisible(hwnd)) {
-        // if (winPid == pTarget->pid && IsWindowVisible(hwnd)) {
             wchar_t windowTitleBuffer[512];
             // Does the window have a title?
             if (GetWindowTextW(
@@ -517,12 +688,12 @@ std::vector<wstring> GetSpotifyTitles(const std::vector<DWORD>& spotifyPIDs) {
                     std::size(windowTitleBuffer) // max number of characters to copy
                 ) > 0
             ) {
-                wstring windowTitle(windowTitleBuffer); // wchar_t ==> wstring
+                std::wstring windowTitle(windowTitleBuffer); // wchar_t ==> wstring
                 /*
                 GDI+ – service or background windows
                 created by the Windows graphics subsystem (not required)
                 */
-                if (windowTitle.find(L"GDI+") == wstring::npos) {
+                if (windowTitle.find(L"GDI+") == std::wstring::npos) {
                     pTarget->titles.push_back(windowTitle);
                 }
             }
@@ -639,7 +810,7 @@ void RefreshAndMute() {
                             &bufferSize // the size of the path buffer 
                     );
                     if (queryFullProcessImageNameResult) {
-                        if (wstring(pathBuffer).find(L"Spotify.exe") != wstring::npos) {
+                        if (std::wstring(pathBuffer).find(L"Spotify.exe") != std::wstring::npos) {
                             ISimpleAudioVolume* pSimpleAudioVolume = nullptr;
                             HRESULT queryInterfaceResult = pAudioSessionControl->QueryInterface(
                                 __uuidof(ISimpleAudioVolume),
@@ -662,8 +833,8 @@ void RefreshAndMute() {
     // Is ad playing now? ==> Mute
     if (!spotifyPIds.empty()) {
         bool mute = false;
-        std::vector <wstring> activeSpotifyTitles = GetSpotifyTitles(spotifyPIds);
-        for (const wstring& title : activeSpotifyTitles) {
+        std::vector <std::wstring> activeSpotifyTitles = GetSpotifyTitles(spotifyPIds);
+        for (const std::wstring& title : activeSpotifyTitles) {
             if (!title.empty() && IsAd(title)) {
                 mute = true;
                 break;
