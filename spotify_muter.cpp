@@ -82,7 +82,8 @@
     WM_NULL,
     WM_COMMAND,
     WM_DESTROY,
-    DefWindowProc
+    DefWindowProc,
+    IMAGE_ICON
 */
 #include <processthreadsapi.h>
 /* processthreadsapi.h
@@ -290,7 +291,7 @@ int WINAPI WinMain(
         nullptr, // system resource that is built into Windows itself
         reinterpret_cast<wchar_t*>(32512), /* image
             32512 == IDIAPPLICATION == Default application icon */
-        1, // type. IMAGE_ICON
+        IMAGE_ICON, // type
         0, // icon width (pixels)
         0, // icon height (pixels)
         LR_DEFAULTSIZE | LR_SHARED /* flags
