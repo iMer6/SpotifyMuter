@@ -645,6 +645,55 @@ bool IsAd(const std::wstring& title) {
     return false;
 }
 
+/**
+ * @brief Retrieves the window titles of visible windows
+ * associated with specified Spotify PIDs.
+ * 
+ * Enumerates all top-level windows on the screen using the Windows API.
+ * Filters the windows to find those that belong to the provided list of PIDs,
+ * are visible, have non-empty titles, and are not internal background windows (GDI+).
+ * 
+ * @param spotifyPIDs vector of DWORDs containing the PIDs of Spotify instances to query
+ * 
+ * @return `std::vector<std::wstring>` – vector of wide strings
+ * containing the retrieved window titles
+ * 
+ * @note Relies on the Windows-specific Win32 API (`EnumWindows`,
+ * `GetWindowThreadProcessId`, etc.).
+ * 
+ * @note ASCII schema.
+ * ```text
+ * Create Target structure in stack
+ *      |
+ *      | Passing address &target as LPARAM
+ *      |
+ * EnumWindows(...)
+ *      |
+ *      | Loop through each window
+ *      |
+ * Callback-lambda for HWND <== -----------------+---+---+---+
+ *      |                                        |   |   |   |
+ *      |==> Is this PID in spotifyPIDs?         |   |   |   |
+ *      |           |                            |   |   |   |
+ *      |      Yes --- No ==> Next window ==> ---+   |   |   |
+ *      |       |                                    |   |   |
+ *      |    Is the window visible?                  |   |   |
+ *      |           |                                |   |   |
+ *      |      Yes --- No ==> Next window ==> -------+   |   |
+ *      |       |                                        |   |
+ *      |    Window title contains "GDI+"?               |   |
+ *      |           |                                    |   |
+ *      |       No --- Yes ==> Next window ==> ----------+   |
+ *      |       |                                            |
+ *      |    Add title to the vector ==> Next window --------+
+ *      |
+ *      |
+ * All windows have been enumerated
+ *      |
+ *      |
+ * Returning a filled vector of titles
+ * ```
+ */
 std::vector<std::wstring> GetSpotifyTitles(const std::vector<DWORD>& spotifyPIDs) {
     /*
     The EnumWindows callback function cannot direclty return a value.
@@ -704,6 +753,20 @@ std::vector<std::wstring> GetSpotifyTitles(const std::vector<DWORD>& spotifyPIDs
     return target.titles;
 }
 
+/**
+ * @brief Enumerates active multimedia audio sessions, identifies Spotify instances
+ * and mutes/unmutes them based on whether an advertisement is currently playing.
+ * 
+ * Utilises the Window Core Audio APIs to access the default multimedia playback
+ * device. Iterates through all active audio sessions to find processes matching
+ * `Spotify.exe`. For each matching instance, it gathers its PID
+ * and volume control interface. Checks the window titles of these PIDs
+ * via `GetSpotifyTitles()`: if an ad is detected (determines by `IsAd()`), all
+ * Spotify audio sessions are muted, otherwise – unmuted.
+ * 
+ * @note Uses explicit goto-based error handling for clean resource deallocation
+ * in case any in intermediate COM operation fails.
+ */
 void RefreshAndMute() {
     // Interface MultiMedia Device (part of a Windows Core Audio APIs)
     IMMDeviceEnumerator* pDeviceEnumerator = nullptr;
