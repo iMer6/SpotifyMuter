@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.10)
 project(SpotifyMuter CXX)
 
 # Executable file name
-add_executable(SpotifyMuter WIN32 spotify_muter.cpp)
+add_executable(SpotifyMuter WIN32 SpotifyMuter.cpp)
 
 # Win32 libraries
 target_link_libraries(SpotifyMuter PRIVATE
